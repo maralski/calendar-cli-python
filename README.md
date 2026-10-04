@@ -2,8 +2,8 @@
 
 A small macOS command-line tool that calls Apple's EventKit directly through
 [PyObjC](https://pyobjc.readthedocs.io/en/latest/apinotes/EventKit.html).
-The command handling, validation, duplicate prevention and compatibility adapter
-are Python. PyObjC supplies compiled bindings to the system frameworks; this is
+The command handling, validation and duplicate prevention are Python.
+PyObjC supplies compiled bindings to the system frameworks; this is
 not a wrapper around AppleScript or another calendar executable.
 
 Calendar does not need to be open. The CLI has no activation commands, daemon,
@@ -142,30 +142,6 @@ Deletion requires the exact calendar, source, event ID, management key and times
 Unmarked events, recurring events (including detached occurrences), all-day
 events and events with attendees or an organizer are preserved. The backend
 re-fetches and compares the event snapshot before deleting only `EKSpanThisEvent`.
-
-## Booking-workflow compatibility
-
-`ensure` and `remove` accept the established fitness confirmation JSON on stdin
-or through `--input`. They require explicitly selected **iCloud Home** and use
-Monday/Wednesday/Thursday 18:00–18:45 in Australia/Melbourne:
-
-```sh
-./calendar-cli ensure --calendar Home --source icloud <<'JSON'
-{"date":"2026-11-02","confirmation":{"classId":"synthetic-class-123","status":"booked","newBooking":true}}
-JSON
-./calendar-cli remove --calendar Home --source icloud <<'JSON'
-{"date":"2026-11-02","confirmation":{"classId":"synthetic-class-123","status":"cancelled","requestedCancellation":true}}
-JSON
-```
-
-These also default to dry runs; add `--execute` only after the caller verifies a
-new booking or requested cancellation. The CLI trusts this receipt; it does not
-contact or authenticate a booking service. Waitlists are rejected. Legacy
-`Managed-Key` and `Class-ID` notes are recognized. Existing unmarked events are
-not adopted or deleted. The adapter retains confirmation input and marker
-semantics, but emits this CLI's JSON fields (`id`, `external_id`, `dry_run`).
-It is not an automatic replacement for another executable. Switch an existing
-integration only after validating its output handling and execution flags.
 
 ## Tests, troubleshooting and security
 
