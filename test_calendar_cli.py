@@ -43,7 +43,7 @@ class FakeBackend:
         return e
 
     def create(self, c, spec):
-        e = cli.Event("synthetic-created-id", "synthetic-external-id", c.id, spec["title"], spec["start"], spec["end"], spec.get("location", ""), spec["key"], spec.get("class_id", ""))
+        e = cli.Event("synthetic-created-id", "synthetic-external-id", c.id, spec["title"], spec["start"], spec["end"], spec.get("location", ""), spec["key"])
         self.items.append(e)
         self.created.append(e)
         return e
@@ -108,8 +108,8 @@ class Tests(unittest.TestCase):
     def test_a_key_with_a_unicode_line_separator_cannot_forge_a_marker(self):
         for separator in ("\u2028", "\u2029", "\x85", "\x1c"):
             with self.subTest(separator=repr(separator)), self.assertRaises(cli.CalendarError):
-                cli.spec_from_json({"title": "Example class", "start": "2026-11-02T18:00:00+11:00", "end": "2026-11-02T18:45:00+11:00",
-                                    "key": "junk" + separator + "Managed-Key: class-calendar:v1|forged"}, "Australia/Melbourne")
+                cli.spec_from_json({"title": "Example appointment", "start": "2026-11-02T18:00:00+11:00", "end": "2026-11-02T18:45:00+11:00",
+                                    "key": "junk" + separator + "Calendar-CLI-Key: example-appointment-001"}, "Australia/Melbourne")
 
     def test_output_escapes_non_ascii_control_characters(self):
         output = io.StringIO()
@@ -205,7 +205,7 @@ class Tests(unittest.TestCase):
 
     def test_create_rejects_invites_recurrence_reserved_markers_and_controls(self):
         value = {"title": "Example", "start": "2026-11-02T18:00:00+11:00", "end": "2026-11-02T18:45:00+11:00", "key": "demo"}
-        for bad in ({"attendees": ["test@example.invalid"]}, {"recurrence": "weekly"}, {"notes": "Managed-Key: forged"}, {"title": "line\nbreak"}, {"key": "nul\x00"}, {"location": 42}, {"notes": "x" * 32769}):
+        for bad in ({"attendees": ["test@example.invalid"]}, {"recurrence": "weekly"}, {"notes": "Calendar-CLI-Key: forged"}, {"title": "line\nbreak"}, {"key": "nul\x00"}, {"location": 42}, {"notes": "x" * 32769}):
             with self.assertRaises(cli.CalendarError):
                 cli.spec_from_json(dict(value, **bad), "UTC")
 
@@ -282,26 +282,6 @@ class Tests(unittest.TestCase):
         self.assertNotIn("key", output)
         self.assertNotIn("notes", output)
 
-    def test_class_compatibility_and_waitlist_safety(self):
-        value = {"date": "2026-11-02", "confirmation": {"classId": "synthetic-class-123", "status": "booked", "newBooking": True}}
-        spec = cli.legacy_spec(value, False)
-        self.assertEqual((spec["end"] - spec["start"]).total_seconds(), 2700)
-        self.assertEqual(spec["timezone"], "Australia/Melbourne")
-        self.assertTrue(spec["key"].startswith("class-calendar:v1|"))
-        for bad in ({"status": "waitlisted"}, {"newBooking": False}, {"classId": "bad\nmarker"}):
-            with self.assertRaises(cli.CalendarError):
-                cli.legacy_spec(dict(value, confirmation=dict(value["confirmation"], **bad)), False)
-        for date in (42, "2026-11-03", "2026-02-30"):
-            with self.assertRaises(cli.CalendarError):
-                cli.legacy_spec(dict(value, date=date), False)
-        for requested in (False, True):
-            receipt = dict(value, confirmation={"classId": "synthetic-class-123", "status": "cancelled", "requestedCancellation": requested})
-            if requested:
-                cli.legacy_spec(receipt, True)
-            else:
-                with self.assertRaises(cli.CalendarError):
-                    cli.legacy_spec(receipt, True)
-
     def test_provider_errors_are_redacted_by_cli(self):
         secret = "private-event-body-example"
         with patch.object(cli, "run", side_effect=RuntimeError(secret)), patch("sys.stderr", new_callable=io.StringIO) as error:
@@ -369,9 +349,8 @@ class Tests(unittest.TestCase):
         args = self.args("events", ["--start", "2026-11-02", "--end", "2026-11-03", "--timezone", "Australia/Melbourne"])
         self.assertEqual(cli.run(args, self.backend)["events"], [])
         payload = {"title": "Example appointment", "start": "2026-11-02T18:00:00+11:00", "end": "2026-11-02T18:45:00+11:00", "key": "example-appointment-001"}
-        for command, body in (("create", payload), ("ensure", {"date": "2026-11-02", "confirmation": {"classId": "synthetic-class-123", "status": "booked", "newBooking": True}}), ("remove", {"date": "2026-11-02", "confirmation": {"classId": "synthetic-class-123", "status": "cancelled", "requestedCancellation": True}})):
-            with patch("sys.stdin", io.StringIO(json.dumps(body))):
-                self.assertTrue(cli.run(self.args(command), self.backend)["dry_run"])
+        with patch("sys.stdin", io.StringIO(json.dumps(payload))):
+            self.assertTrue(cli.run(self.args("create"), self.backend)["dry_run"])
         self.assertEqual(self.backend.created, [])
         self.assertEqual(self.backend.deleted, [])
 

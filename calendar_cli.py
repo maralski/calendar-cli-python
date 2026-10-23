@@ -99,7 +99,6 @@ class Event:
     end: datetime
     location: str = ""
     key: str = ""
-    class_id: str = ""
     recurring: bool = False
     attendees: bool = False
     all_day: bool = False
@@ -206,12 +205,10 @@ class EventKitBackend:
         return c
 
     def _record(self, e) -> Event:
-        key = class_id = ""
+        key = ""
         for line in str(e.notes() or "").splitlines():
-            if line.startswith(("Calendar-CLI-Key: ", "Managed-Key: ")):
+            if line.startswith("Calendar-CLI-Key: "):
                 key = line.split(": ", 1)[1]
-            elif line.startswith("Class-ID: "):
-                class_id = line[10:]
         to_dt = lambda d: datetime.fromtimestamp(float(d.timeIntervalSince1970()), timezone.utc)
         modified = e.lastModifiedDate()
         fingerprint = hashlib.sha256(json.dumps([str(e.notes() or ""), str(e.URL() or ""),
@@ -219,7 +216,7 @@ class EventKitBackend:
                                                  ensure_ascii=False).encode()).hexdigest()
         return Event(str(e.eventIdentifier()), str(e.calendarItemExternalIdentifier() or ""),
                      str(e.calendar().calendarIdentifier()), str(e.title() or ""), to_dt(e.startDate()),
-                     to_dt(e.endDate()), str(e.location() or ""), key, class_id,
+                     to_dt(e.endDate()), str(e.location() or ""), key,
                      bool(e.hasRecurrenceRules() or e.isDetached()),
                      bool(e.attendees() or e.organizer()), bool(e.isAllDay()), fingerprint)
 
@@ -251,10 +248,7 @@ class EventKitBackend:
         e.setTimeZone_(self.tz.timeZoneWithName_(spec["timezone"]))
         e.setLocation_(spec.get("location", ""))
         e.setAllDay_(False)
-        marker = "Managed-Key" if spec.get("class_id") else "Calendar-CLI-Key"
-        lines = [f"{marker}: {spec['key']}"]
-        if spec.get("class_id"):
-            lines.append(f"Class-ID: {spec['class_id']}")
+        lines = [f"Calendar-CLI-Key: {spec['key']}"]
         if spec.get("notes"):
             lines.append(spec["notes"])
         e.setNotes_("\n".join(lines))
@@ -327,7 +321,7 @@ class State:
         try:
             row = db.execute("SELECT payload FROM events WHERE scope = ?", (calendar.id + "|" + key,)).fetchone()
             value = json_object(row[0]) if row else None
-            if value is not None and (value.get("state") not in ("active", "cancelled") or not isinstance(value.get("event_id"), str) or not isinstance(value.get("class_id"), str)):
+            if value is not None and (value.get("state") not in ("active", "cancelled") or not isinstance(value.get("event_id"), str)):
                 raise CalendarError("Invalid local state record; no change.")
             return value
         except (sqlite3.Error, ValueError):
@@ -359,7 +353,7 @@ class State:
             self.db = None
 
     def put(self, calendar: Calendar, key: str, event: Event, status: str) -> None:
-        value = {"event_id": event.id, "external_id": event.external_id, "class_id": event.class_id, "state": status}
+        value = {"event_id": event.id, "external_id": event.external_id, "state": status}
         self.db.execute("INSERT OR REPLACE INTO events VALUES (?, ?)", (calendar.id + "|" + key, json.dumps(value)))
 
 
@@ -381,20 +375,14 @@ class Service:
     def decide(self, c: Calendar, spec: dict[str, Any], remove: bool = False) -> tuple[str, Event | None]:
         events, prior = self.candidates(c, spec)
         marked = [e for e in events if e.key == spec["key"]]
-        def similar(e):
-            name = (e.title.casefold().startswith("example-class") or e.title.casefold().startswith("example class")) if spec.get("class_id") else e.title == spec["title"]
-            place = "example" in e.location.casefold() if spec.get("class_id") else True
-            return name and place and same_time(e.start, spec["start"]) and e.key != spec["key"]
-        unmarked = [e for e in events if similar(e)]
-        if prior and prior.get("class_id", "") != spec.get("class_id", ""):
-            raise CalendarError("Saved class identity differs from confirmation; no change.")
+        unmarked = [e for e in events if e.title == spec["title"] and same_time(e.start, spec["start"]) and e.key != spec["key"]]
         if len(marked) > 1 or len(unmarked) > 1 or (marked and unmarked):
             raise CalendarError("Multiple matching events; no change.")
         if marked:
             e = marked[0]
             if prior and e.id != prior.get("event_id") and not (e.external_id and e.external_id == prior.get("external_id")):
                 raise CalendarError("Marked event is not the one recorded in local state; reconcile before retrying.")
-            if (not same_time(e.start, spec["start"]) or not same_time(e.end, spec["end"]) or e.title != spec["title"] or e.class_id != spec.get("class_id", "") or e.recurring or e.attendees or e.all_day or (spec.get("class_id") and "example" not in e.location.casefold())):
+            if (not same_time(e.start, spec["start"]) or not same_time(e.end, spec["end"]) or e.title != spec["title"] or e.recurring or e.attendees or e.all_day):
                 raise CalendarError("Marked event changed or is not a safe standalone event; no change.")
             if spec.get("expected_id") and e.id != spec["expected_id"]:
                 raise CalendarError("The exact requested event ID is no longer the deletion target; no change.")
@@ -442,7 +430,7 @@ def spec_from_json(value: dict, timezone_name: str) -> dict:
     if not isinstance(value.get("notes", ""), str) or len(value.get("notes", "")) > 32768 or "\x00" in value.get("notes", ""):
         raise CalendarError("Notes must be a string of at most 32768 characters without NUL.")
     notes = value.get("notes", "")
-    if any(line.startswith(("Calendar-CLI-Key:", "Managed-Key:", "Class-ID:")) for line in notes.splitlines()):
+    if any(line.startswith("Calendar-CLI-Key:") for line in notes.splitlines()):
         raise CalendarError("Notes may not contain reserved management markers.")
     start, end = parse_time(value.get("start"), tz), parse_time(value.get("end"), tz)
     bounded(start, end)
@@ -450,26 +438,6 @@ def spec_from_json(value: dict, timezone_name: str) -> dict:
     if (end.date() - start.date()).days > 29:
         raise CalendarError("A created event must span fewer than 30 local days.")
     return dict(value, start=start, end=end, timezone=tz.key)
-
-
-def legacy_spec(value: dict, remove: bool) -> dict:
-    if not isinstance(value, dict) or not isinstance(value.get("confirmation"), dict):
-        raise CalendarError("The established confirmation JSON object is required.")
-    receipt = value["confirmation"]
-    status = "cancelled" if remove else "booked"
-    required = "requestedCancellation" if remove else "newBooking"
-    if receipt.get("status") != status or receipt.get(required) is not True:
-        raise CalendarError("Only a NEW confirmed booking or confirmed requested cancellation is accepted; waitlists are excluded.")
-    class_id = receipt.get("classId")
-    if not isinstance(class_id, str) or not class_id or len(class_id) > 200 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-" for c in class_id):
-        raise CalendarError("A valid confirmed classId is required.")
-    date = text(value.get("date"), "date", 10)
-    start = parse_time(date + "T18:00:00", zone("Australia/Melbourne"))
-    if start.strftime("%Y-%m-%d") != date or start.weekday() not in (0, 2, 3):
-        raise CalendarError("Use a Monday, Wednesday or Thursday class date as YYYY-MM-DD.")
-    key = f"class-calendar:v1|example|example-class|{date}|18:00|Australia/Melbourne"
-    return {"title": "Example class", "start": start, "end": start + timedelta(minutes=45),
-            "timezone": "Australia/Melbourne", "location": "1 Example Street, Example VIC 3000", "key": key, "class_id": class_id}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -481,20 +449,20 @@ def parser() -> argparse.ArgumentParser:
     calendars = sub.add_parser("calendars", help="Calendar/source metadata only")
     calendars.add_argument("--name")
     calendars.add_argument("--source")
-    for name in ("events", "create", "delete", "ensure", "remove"):
+    for name in ("events", "create", "delete"):
         s = sub.add_parser(name)
         s.add_argument("--calendar-id")
         s.add_argument("--source-id")
         s.add_argument("--calendar", help="Exact calendar name, requires --source")
         s.add_argument("--source", help="Account/source name")
-        s.add_argument("--timezone", default=None, help="IANA timezone; default UTC, class adapter uses Melbourne")
+        s.add_argument("--timezone", default=None, help="IANA timezone; default UTC")
         if name == "events":
             s.add_argument("--start", required=True)
             s.add_argument("--end", required=True)
             s.add_argument("--limit", type=int, default=200)
         else:
             s.add_argument("--execute", action="store_true", help="Commit the operation; omitted means preview only")
-            if name in ("create", "ensure", "remove"):
+            if name == "create":
                 s.add_argument("--input", type=Path, help="JSON input file; omitted reads stdin")
             else:
                 s.add_argument("--event-id", required=True)
@@ -536,12 +504,8 @@ def run(args, backend=None) -> dict:
         events = sorted(backend.events(c, start, end), key=lambda e: (e.start.timestamp(), e.id))
         return {"calendar": asdict(c), "timezone": tz.key, "events": [public(e, tz) for e in events[:args.limit]], "truncated": len(events) > args.limit}
     service = Service(backend, State(args.state))
-    if args.command in ("create", "ensure", "remove"):
-        value = input_object(args.input)
-        spec = spec_from_json(value, timezone_name) if args.command == "create" else legacy_spec(value, args.command == "remove")
-        if args.command in ("ensure", "remove") and (c.name != "Home" or c.source.casefold() != "icloud"):
-            raise CalendarError("The compatibility adapter requires the exact selected iCloud Home calendar.")
-        return service.apply(c, spec, args.execute, args.command == "remove")
+    if args.command == "create":
+        return service.apply(c, spec_from_json(input_object(args.input), timezone_name), args.execute)
     text(args.event_id, "event ID")
     text(args.key, "management key")
     event = backend.get(c, args.event_id)
@@ -552,7 +516,7 @@ def run(args, backend=None) -> dict:
     start, end = parse_time(args.expect_start, tz), parse_time(args.expect_end, tz)
     if not same_time(event.start, start) or not same_time(event.end, end):
         raise CalendarError("Event times differ from the requested deletion; no change.")
-    spec = {"title": event.title, "start": start, "end": end, "timezone": tz.key, "key": event.key, "class_id": event.class_id, "expected_id": args.event_id}
+    spec = {"title": event.title, "start": start, "end": end, "timezone": tz.key, "key": event.key, "expected_id": args.event_id}
     return service.apply(c, spec, args.execute, True)
 
 

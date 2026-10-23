@@ -69,7 +69,6 @@ organizer-only invitation state, DST ambiguity and private change fingerprints.
   disappears. Exact-ID deletion remains preferable.
 - Full Calendar Access is an OS-wide calendar grant to the host. The CLI narrows
   its own queries; it cannot convert that grant into a Home-only permission.
-  The confirmation adapter trusts its caller's booking/cancellation receipt.
 - Compatibility across all documented macOS/Python versions and live write
   behavior have not been exhaustively tested. Dependency updates need renewed
   tests and review.
