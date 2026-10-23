@@ -218,7 +218,7 @@ class EventKitBackend:
         return Event(str(e.eventIdentifier()), str(e.calendarItemExternalIdentifier() or ""),
                      str(e.calendar().calendarIdentifier()), str(e.title() or ""), to_dt(e.startDate()),
                      to_dt(e.endDate()), str(e.location() or ""), key, class_id,
-                     bool(e.hasRecurrenceRules() or e.isDetached() or e.occurrenceDate()),
+                     bool(e.hasRecurrenceRules() or e.isDetached()),
                      bool(e.attendees() or e.organizer()), bool(e.isAllDay()), fingerprint)
 
     def events(self, selected: Calendar, start: datetime, end: datetime) -> list[Event]:

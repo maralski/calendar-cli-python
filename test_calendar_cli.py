@@ -303,6 +303,20 @@ class Tests(unittest.TestCase):
         self.assertNotEqual(record.revision, backend._record(event).revision)
         self.assertNotIn("private body", json.dumps(cli.public(record, cli.zone("UTC"))))
 
+    def test_native_record_treats_a_plain_event_with_an_occurrence_date_as_standalone(self):
+        # EventKit returns the start date as occurrenceDate for every event, recurring or not.
+        backend = cli.EventKitBackend.__new__(cli.EventKitBackend)
+        calendar = SimpleNamespace(calendarIdentifier=lambda: HOME.id)
+        instant = SimpleNamespace(timeIntervalSince1970=lambda: self.spec["start"].timestamp())
+        fields = {"notes": "Calendar-CLI-Key: demo", "URL": None, "lastModifiedDate": instant,
+                  "eventIdentifier": "synthetic-event-id", "calendarItemExternalIdentifier": "synthetic-external-id", "calendar": calendar,
+                  "title": "Example", "startDate": instant, "endDate": instant, "location": "", "hasRecurrenceRules": False,
+                  "isDetached": False, "occurrenceDate": instant, "attendees": [], "organizer": None, "isAllDay": False}
+        event = SimpleNamespace(**{k: (lambda value=v: value) for k, v in fields.items()})
+        self.assertFalse(backend._record(event).recurring)
+        event.hasRecurrenceRules = lambda: True
+        self.assertTrue(backend._record(event).recurring)
+
     def test_native_delete_does_not_accept_changed_snapshot_or_wrong_calendar(self):
         backend = cli.EventKitBackend.__new__(cli.EventKitBackend)
         backend._calendar = lambda c: SimpleNamespace(allowsContentModifications=lambda: True)
