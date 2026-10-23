@@ -25,7 +25,9 @@ MAX_INPUT = 65536
 
 
 def text(value: Any, label: str, limit: int = 512, empty: bool = False) -> str:
-    if not isinstance(value, str) or len(value) > limit or (not empty and not value.strip()) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+    # splitlines() also breaks on U+2028/U+2029/U+0085/U+001C-1E, which could otherwise forge a notes marker line.
+    if (not isinstance(value, str) or len(value) > limit or (not empty and not value.strip()) or (value and value.splitlines() != [value])
+            or any(ord(c) < 32 or ord(c) == 127 for c in value)):
         raise CalendarError(f"Invalid {label}; use a bounded single-line string.")
     return value
 
@@ -340,6 +342,8 @@ class State:
         if not self.path.exists():
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_RDWR, 0o600)
             os.close(fd)
+        # Directories created above were not checked by the first pass.
+        self.validate()
         # SQLite serializes CLI operations; EventKit itself is not part of this transaction.
         self.db = sqlite3.connect(self.path, timeout=1)
         try:
@@ -388,6 +392,8 @@ class Service:
             raise CalendarError("Multiple matching events; no change.")
         if marked:
             e = marked[0]
+            if prior and e.id != prior.get("event_id") and not (e.external_id and e.external_id == prior.get("external_id")):
+                raise CalendarError("Marked event is not the one recorded in local state; reconcile before retrying.")
             if (not same_time(e.start, spec["start"]) or not same_time(e.end, spec["end"]) or e.title != spec["title"] or e.class_id != spec.get("class_id", "") or e.recurring or e.attendees or e.all_day or (spec.get("class_id") and "example" not in e.location.casefold())):
                 raise CalendarError("Marked event changed or is not a safe standalone event; no change.")
             if spec.get("expected_id") and e.id != spec["expected_id"]:
@@ -554,10 +560,10 @@ def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
         result = run(args)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0
     except CalendarError as error:
-        print(json.dumps({"error": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"error": str(error)}, ensure_ascii=True), file=sys.stderr)
         return 2
     except (OSError, sqlite3.Error):
         print(json.dumps({"error": "Local file/state operation failed; inspect before retrying any executed write."}), file=sys.stderr)

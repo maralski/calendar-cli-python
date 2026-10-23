@@ -20,7 +20,7 @@ have not been tested here. Writes were tested only with an offline fake backend.
 git clone https://github.com/maralski/calendar-cli-python.git
 cd calendar-cli-python
 python3 -m venv .venv
-.venv/bin/python -m pip install --only-binary=:all: -r requirements.txt
+.venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements.txt
 ./calendar-cli --help
 ./calendar-cli status
 ```

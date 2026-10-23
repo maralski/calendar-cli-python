@@ -96,6 +96,28 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.service.apply(HOME, self.spec, True)["operation"], "exists")
         self.assertEqual(len(self.backend.created), 1)
 
+    def test_a_same_key_copy_is_not_adopted_or_deleted_in_place_of_the_recorded_event(self):
+        self.service.apply(HOME, self.spec, True)
+        self.backend.items[0] = replace(self.backend.items[0], id="copied-event-id", external_id="copied-external-id")
+        with self.assertRaises(cli.CalendarError):
+            self.service.apply(HOME, self.spec, True)
+        with self.assertRaises(cli.CalendarError):
+            self.service.apply(HOME, self.spec, True, remove=True)
+        self.assertEqual(self.backend.deleted, [])
+
+    def test_a_key_with_a_unicode_line_separator_cannot_forge_a_marker(self):
+        for separator in ("\u2028", "\u2029", "\x85", "\x1c"):
+            with self.subTest(separator=repr(separator)), self.assertRaises(cli.CalendarError):
+                cli.spec_from_json({"title": "Example class", "start": "2026-11-02T18:00:00+11:00", "end": "2026-11-02T18:45:00+11:00",
+                                    "key": "junk" + separator + "Managed-Key: class-calendar:v1|forged"}, "Australia/Melbourne")
+
+    def test_output_escapes_non_ascii_control_characters(self):
+        output = io.StringIO()
+        with patch.object(cli, "run", return_value={"title": "spoof \u202e \x9b"}), patch("sys.stdout", output):
+            self.assertEqual(cli.main(["status"]), 0)
+        self.assertNotIn("\u202e", output.getvalue())
+        self.assertNotIn("\x9b", output.getvalue())
+
     def test_missing_saved_event_is_not_recreated(self):
         self.service.apply(HOME, self.spec, True)
         self.backend.items.clear()
